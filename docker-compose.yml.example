@@ -1,0 +1,100 @@
+version: "3.5"
+
+x-common-env: &common-env
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+  KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+  KAFKA_CONTROLLER_QUORUM_VOTERS: "1@broker1:29093,2@broker2:29093"
+  KAFKA_PROCESS_ROLES: "broker,controller"
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+  CLUSTER_ID: "ciWo7IWaznqRchmPES6o5A=="
+  KAFKA_LOG_DIRS: /tmp/krarft-combined-logs
+  KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+  CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+  CONFLUENT_METRICS_ENABLE: "true"
+  CONFLUENT_SUPPORT_CUSTOMER_ID: annonymous
+
+x-common-healthcheck: &common-healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 5
+
+services:
+  broker1:
+    image: confluentinc/cp-server
+    container_name: broker1
+    hostname: broker1
+
+    ports:
+      - "9092:9092"
+
+    environment:
+      <<: *common-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: "INTERNAL://broker1:29092,CONTROLLER://broker1:29093,EXTERNAL://0.0.0.0:9092"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://broker1:29092,EXTERNAL://localhost:9092"
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker1:29092
+
+    healthcheck:
+      <<: *common-healthcheck
+      test:
+        ["CMD", "bash", "-c", "echo '*****************' | nc localhost 9092"]
+
+    networks:
+      - datamasterlab
+
+  broker2:
+    image: confluentinc/cp-server
+    container_name: broker2
+    hostname: broker2
+
+    ports:
+      - "9093:9093"
+
+    environment:
+      <<: *common-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: "INTERNAL://broker2:29092,CONTROLLER://broker2:29093,EXTERNAL://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://broker1:29092,EXTERNAL://localhost:9093"
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: broker2:29092
+
+    healthcheck:
+      <<: *common-healthcheck
+      test:
+        ["CMD", "bash", "-c", "echo '*****************' | nc localhost 9093"]
+
+    networks:
+      - datamasterlab
+
+  contorl-center:
+    image: confluentinc/cp-enterprise-control-center
+    hostname: control-center
+    container_name: contorl-center
+    # depends_on:
+    #   schema-regestry:
+    #     condition: service_healthy
+    ports:
+      - "9021:9021"
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: "broker1:29092,broker2:29093"
+      # CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-regestry:8081"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTRL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTRL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      CONFLUENT_METRICS_ENABEL: "false"
+      PORT: 9021
+
+    networks:
+      - datamasterlab
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9021/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  datamasterlab:
