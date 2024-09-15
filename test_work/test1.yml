@@ -180,14 +180,15 @@ services:
     environment:
       - FLINK_PYTHON_EXECUTABLE=python3
       - PYTHONPATH=/path/to/python/bin
-      - JOB_MANAGER_RPC_ADDRESS=jobmanager
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
-    expose:
-      - "6123"
+        env.java.opts: -Dpython.executable=python3
+        python.executable: /usr/bin/python3
+        python.client.exec.python.work.dir: /flink_tmp
     ports:
       - "8081:8081" # Flink Web UI
+      - "6123:6123" # JobManager RPC
     networks:
       - streaming-analytics
     command: jobmanager
@@ -200,7 +201,6 @@ services:
       dockerfile: Dockerfile
     platform: linux/amd64
     environment:
-      - JOB_MANAGER_RPC_ADDRESS=jobmanager
       - FLINK_PYTHON_EXECUTABLE=python3
       - PYTHONPATH=/path/to/python/bin
       - |
@@ -209,19 +209,28 @@ services:
         jobmanager.rpc.address: jobmanager
         env.java.opts: -Dpython.executable=python3
         python.executable: /usr/bin/python3
-    links:
-      - jobmanager:jobmanager
-    expose:
-      - "6121"
-      - "6122"
+
     depends_on:
       - jobmanager
     networks:
       - streaming-analytics
     command: taskmanager
     scale: 2
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: client
+    networks:
+      - streaming-analytics
+    depends_on:
+      - jobmanager
+    stdin_open: true
+    tty: true
     volumes:
-      - ./flink/:/flink_jobs
+      - ./flink:/flink_jobs
+    command: bash
 
 volumes:
   postgresql_data:

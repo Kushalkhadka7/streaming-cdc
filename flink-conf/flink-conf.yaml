@@ -1,0 +1,26 @@
+python.executable: /usr/bin/python3
+jobmanager.rpc.address: jobmanager
+blob.server.port: 6124
+query.server.port: 6125
+
+jobmanager.rpc.address: jobmanager
+env.java.opts: -Dpython.executable=python3
+
+
+jobmanager.rpc.address: jobmanager
+env.java.opts: -Dpython.executable=python3
+
+
+jobmanager.rpc.address: jobmanager
+env.java.opts: -Dpython.executable=python3
+
+
+taskmanager.numberOfTaskSlots: 2
+jobmanager.rpc.address: jobmanager
+env.java.opts: -Dpython.executable=python3
+
+
+taskmanager.numberOfTaskSlots: 2
+jobmanager.rpc.address: jobmanager
+env.java.opts: -Dpython.executable=python3
+
