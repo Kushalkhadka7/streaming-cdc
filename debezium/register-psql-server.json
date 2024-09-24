@@ -1,0 +1,13 @@
+{
+  "name": "fulfillment-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "topic.prefix": "orders",
+    "database.hostname": "postgres",
+    "database.user": "admin",
+    "database.password": "admin",
+    "database.dbname": "streaming-analytics",
+    "plugin.name": "pgoutput",
+    "table.include.list": "public.orders"
+  }
+}

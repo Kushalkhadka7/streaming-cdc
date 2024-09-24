@@ -1,24 +1,66 @@
 services:
-  postgres:
-    image: postgres:13
+  analytics_postgres:
+    image: postgres:12.20-alpine
     restart: always
-    container_name: postgres
-    hostname: postgres
+    container_name: analytics_postgres
+    hostname: analytics_postgres
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: steaming-analytics
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: streaming_analytics
     volumes:
       - postgresql_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./postgressql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    # This is needed for debezium to work.
     command: ["postgres", "-c", "wal_level=logical"]
     healthcheck:
-      test: ["CMD", "psql", "-U", "postgres", "-c", "SELECT 1"]
+      test: ["CMD", "psql", "-U", "admin", "-c", "SELECT 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - streaming-analytics
+
+  analytics_mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    restart: always
+    container_name: analytics_mssql
+    hostname: analytics_mssql
+    ports:
+      - "1433:1433"
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=admin@123
+    volumes:
+      - mssql_data:/var/opt/mssql
+    networks:
+      - streaming-analytics
+
+  load_products:
+    build:
+      context: ./data_generators
+      dockerfile: Dockerfile
+    container_name: data_loader
+    command: python product_generator.py
+    volumes:
+      - ./data_generators/product_generator.py:/app/product_generator.py
+    environment:
+      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
+    networks:
+      - streaming-analytics
+
+  load_orders:
+    build:
+      context: ./data_generators
+      dockerfile: Dockerfile
+    container_name: data_loader
+    command: python order_generator.py
+    volumes:
+      - ./data_generators/order_generator.py:/app/order_generator.py
+    environment:
+      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
     networks:
       - streaming-analytics
 
@@ -52,34 +94,34 @@ services:
     networks:
       - streaming-analytics
 
-  broker2:
-    image: confluentinc/cp-server:7.5.0
-    hostname: broker2
-    container_name: broker2
-    ports:
-      - "9093:9093"
-      - "9094:9094"
-    environment:
-      KAFKA_NODE_ID: 2
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
-      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker2:29094,PLAINTEXT_HOST://localhost:9093"
-      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
-      KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "broker2:9093"
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_JMX_PORT: 9101
-      KAFKA_JMX_HOSTNAME: localhost
-      KAFKA_PROCESS_ROLES: "broker,controller"
-      KAFKA_CONTROLLER_QUORUM_VOTERS: "2@broker2:29094"
-      KAFKA_LISTENERS: "PLAINTEXT://broker2:29094,CONTROLLER://broker2:29095,PLAINTEXT_HOST://0.0.0.0:9093"
-      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
-      CLUSTER_ID: "ciWo7IWaznqRchmPES6o5A=="
-    networks:
-      - streaming-analytics
+  # broker2:
+  #   image: confluentinc/cp-server:7.5.0
+  #   hostname: broker2
+  #   container_name: broker2
+  #   ports:
+  #     - "9093:9093"
+  #     - "9094:9094"
+  #   environment:
+  #     KAFKA_NODE_ID: 2
+  #     KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+  #     KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker2:29094,PLAINTEXT_HOST://localhost:9093"
+  #     KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+  #     KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "broker2:9093"
+  #     KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  #     KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+  #     KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+  #     KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+  #     KAFKA_JMX_PORT: 9101
+  #     KAFKA_JMX_HOSTNAME: localhost
+  #     KAFKA_PROCESS_ROLES: "broker,controller"
+  #     KAFKA_CONTROLLER_QUORUM_VOTERS: "2@broker2:29094"
+  #     KAFKA_LISTENERS: "PLAINTEXT://broker2:29094,CONTROLLER://broker2:29095,PLAINTEXT_HOST://0.0.0.0:9093"
+  #     KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+  #     KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+  #     KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+  #     CLUSTER_ID: "ciWo7IWaznqRchmPES6o5A=="
+  #   networks:
+  #     - streaming-analytics
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
@@ -87,7 +129,7 @@ services:
     container_name: schema-registry
     depends_on:
       - broker1
-      - broker2
+      # - broker2
     ports:
       - "8081:8081"
     environment:
@@ -103,8 +145,8 @@ services:
     container_name: control-center
     depends_on:
       - broker1
-      - broker2
-      - schema-registry
+      # - broker2
+      # - schema-registry
     ports:
       - "9021:9021"
     environment:
@@ -115,22 +157,26 @@ services:
       CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
       CONFLUENT_METRICS_TOPIC_REPLICATION: 1
       CONFLUENT_METRICS_ENABLE: "false"
+      CONTROL_CENTER_CONNECT_CLUSTER: debezium1:8083,debezium2:8083
+      CONTROL_CENTER_MONITORING_INTERCEPTOR: "true"
+      CONTROL_CENTER_CONNECT_CLUSTER_NAME: 1
+      CONTROL_CENTER_CONNECT_CLUSTER_URL: "http://debezium1:8083,http://debezium2:8083"
       PORT: 9021
     networks:
       - streaming-analytics
 
-  debezium:
-    image: debezium/connect
-    container_name: debezium
-    hostname: debezium
+  debezium1:
+    image: debezium/connect:2.7
+    container_name: debezium1
+    hostname: debezium1
     depends_on:
       - broker1
-      - postgres
+      - analytics_postgres
     ports:
-      - "8093:8083"
+      - "8094:8083"
     environment:
       BOOTSTRAP_SERVERS: broker1:29092
-      CONNECT_REST_ADVERTISED_HOST_NAME: debezium
+      CONNECT_REST_ADVERTISED_HOST_NAME: debezium1
       GROUP_ID: 1
       CONFIG_STORAGE_TOPIC: connect_configs
       STATUS_STORAGE_TOPIC: connect_statuses
@@ -161,12 +207,11 @@ services:
     container_name: debezium-ui
     hostname: debezium-ui
     depends_on:
-      debezium:
-        condition: service_healthy
+      - debezium1
     ports:
       - "8080:8080"
     environment:
-      KAFKA_CONNECT_URIS: http://debezium:8083
+      KAFKA_CONNECT_URIS: http://debezium1:8083
     networks:
       - streaming-analytics
 
@@ -176,7 +221,6 @@ services:
       dockerfile: Dockerfile
     container_name: jobmanager
     hostname: jobmanager
-    platform: linux/amd64
     environment:
       - FLINK_PYTHON_EXECUTABLE=python3
       - PYTHONPATH=/path/to/python/bin
@@ -184,10 +228,26 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
+        # jobmanager.memory.process.size: 2048m  # Increase this as needed (e.g., 3g or 4g)
+        # jobmanager.memory.jvm-metaspace.size: 256m  # Adjust to leave enough space for other JVM operations
+        # jobmanager.memory.jvm-overhead.min: 128m
+        # jobmanager.memory.jvm-overhead.fraction: 0.1 
+        # jobmanager.memory.managed.size: 1024m  # You can adjust this as per your available memory
+        # jobmanager.memory.off-heap.size: 512m  #
+        # jobmanager.memory.jvm-overhead.min: 128m  # Adjust to lower values like 64m to reduce overhead
+        # taskmanager.memory.jvm-overhead.min: 128m  # Same for TaskManager
+        # taskmanager.memory.jvm-overhead.max: 256m
+        # jobmanager.memory.jvm-overhead.max: 256m
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 3G # Increase the memory limit for JobManager
+    #     reservations:
+    #       memory: 2G # Reserved memory for JobManager
     expose:
       - "6123"
     ports:
-      - "8081:8081" # Flink Web UI
+      - "8086:8081" # Flink Web UI
     networks:
       - streaming-analytics
     command: jobmanager
@@ -205,10 +265,15 @@ services:
       - PYTHONPATH=/path/to/python/bin
       - |
         FLINK_PROPERTIES=
-        taskmanager.numberOfTaskSlots: 2
+        taskmanager.numberOfTaskSlots: 1
         jobmanager.rpc.address: jobmanager
         env.java.opts: -Dpython.executable=python3
         python.executable: /usr/bin/python3
+        # taskmanager.memory.process.size: 2048m  # Increase this as needed (e.g., 3g or 4g)
+        # taskmanager.memory.jvm-metaspace.size: 256m
+        # taskmanager.memory.jvm-overhead.min: 128m
+        # taskmanager.memory.managed.size: 1024m  # You can adjust this as per your available memory
+        # taskmanager.memory.off-heap.size: 512m  #
     links:
       - jobmanager:jobmanager
     expose:
@@ -222,9 +287,16 @@ services:
     scale: 2
     volumes:
       - ./flink/:/flink_jobs
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 3G # Increase the memory limit for JobManager
+    #     reservations:
+    #       memory: 2G # Reserved memory for JobManager
 
 volumes:
   postgresql_data:
+  mssql_data:
 
 networks:
   streaming-analytics:

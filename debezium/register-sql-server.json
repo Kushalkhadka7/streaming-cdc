@@ -1,0 +1,21 @@
+{
+  "name": "sqlserver-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.sqlserver.SqlServerConnector",
+    "database.hostname": "mssql",
+    "database.port": "1433",
+    "database.user": "sa",
+    "database.password": "admin@123",
+    "database.dbname": "streaming_analytics",
+    "database.names": "streaming_analytics",
+    "database.server.name": "sqlserver",
+    "table.include.list": "dbo.products",
+    "database.history.kafka.bootstrap.servers": "broker1:29092",
+    "database.history.kafka.topic": "dbhistory.sqlserver",
+    "topic.prefix": "products",
+    "snapshot.mode": "initial",
+    "encrypt": "true",
+    "trustServerCertificate": "true",
+    "integratedSecurity": "true"
+  }
+}
