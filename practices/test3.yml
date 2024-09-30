@@ -1,0 +1,30 @@
+jobmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jobmanager
+    hostname: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+    ports:
+      - "8081:8081"
+    networks:
+      - streaming-analytics
+    command: jobmanager
+
+  taskmanager1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        taskmanager.numberOfTaskSlots: 2
+    depends_on:
+      - jobmanager
+    networks:
+      - streaming-analytics
+    command: taskmanager
+    scale: 2

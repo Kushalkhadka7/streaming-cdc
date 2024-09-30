@@ -9,9 +9,8 @@ RUN apt-get update && apt-get install -y \
     unixodbc \
     python3-dev
 
-RUN pip install faker
-RUN pip install sqlalchemy pymssql 
-RUN pip install psycopg2-binary
+COPY ./requirements.txt .
+RUN pip install -r requirements.txt
 
 RUN export LD_LIBRARY_PATH=/opt/microsoft/msodbcsql17/lib64/:$LD_LIBRARY_PATH
 

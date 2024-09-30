@@ -1,0 +1,241 @@
+services:
+  postgres:
+    image: postgres:13
+    restart: always
+    container_name: postgres
+    hostname: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: steaming-analytics
+    volumes:
+      - postgresql_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: ["postgres", "-c", "wal_level=logical"]
+    healthcheck:
+      test: ["CMD", "psql", "-U", "postgres", "-c", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - streaming-analytics
+
+  broker1:
+    image: confluentinc/cp-server:7.5.0
+    hostname: broker1
+    container_name: broker1
+    ports:
+      - "29092:29092"
+      - "9092:9092"
+      - "9091:9091"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker1:29092,PLAINTEXT_HOST://localhost:9092"
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "broker1:9092"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@broker1:29093"
+      KAFKA_LISTENERS: "PLAINTEXT://broker1:29092,CONTROLLER://broker1:29093,PLAINTEXT_HOST://0.0.0.0:9092"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      CLUSTER_ID: "ciWo7IWaznqRchmPES6o5A=="
+    networks:
+      - streaming-analytics
+
+  broker2:
+    image: confluentinc/cp-server:7.5.0
+    hostname: broker2
+    container_name: broker2
+    ports:
+      - "9093:9093"
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker2:29094,PLAINTEXT_HOST://localhost:9093"
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "broker2:9093"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "2@broker2:29094"
+      KAFKA_LISTENERS: "PLAINTEXT://broker2:29094,CONTROLLER://broker2:29095,PLAINTEXT_HOST://0.0.0.0:9093"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      CLUSTER_ID: "ciWo7IWaznqRchmPES6o5A=="
+    networks:
+      - streaming-analytics
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      - broker1
+      - broker2
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "broker1:29092,broker2:29094"
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    networks:
+      - streaming-analytics
+
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:7.5.0
+    hostname: control-center
+    container_name: control-center
+    depends_on:
+      - broker1
+      - broker2
+      - schema-registry
+    ports:
+      - "9021:9021"
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: "broker1:29092,broker2:29094"
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-regestry:8081"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONFLUENT_METRICS_TOPIC_REPLICATION: 1
+      CONFLUENT_METRICS_ENABLE: "false"
+      PORT: 9021
+    networks:
+      - streaming-analytics
+
+  debezium:
+    image: debezium/connect
+    container_name: debezium
+    hostname: debezium
+    depends_on:
+      - broker1
+      - postgres
+    ports:
+      - "8093:8083"
+    environment:
+      BOOTSTRAP_SERVERS: broker1:29092
+      CONNECT_REST_ADVERTISED_HOST_NAME: debezium
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: connect_configs
+      STATUS_STORAGE_TOPIC: connect_statuses
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      ENABLE_DEBEZIUM_SCRIPTING: "true"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "--silent",
+          "--fail",
+          "-X",
+          "GET",
+          "http://localhost:8083/connectors",
+        ]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - streaming-analytics
+
+  debezium-ui:
+    image: debezium/debezium-ui:2.1.0.Final
+    container_name: debezium-ui
+    hostname: debezium-ui
+    depends_on:
+      debezium:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CONNECT_URIS: http://debezium:8083
+    networks:
+      - streaming-analytics
+
+  jobmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jobmanager
+    hostname: jobmanager
+    platform: linux/amd64
+    environment:
+      - FLINK_PYTHON_EXECUTABLE=python3
+      - PYTHONPATH=/path/to/python/bin
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: jobmanager
+        env.java.opts: -Dpython.executable=python3
+        python.executable: /usr/bin/python3
+        python.client.exec.python.work.dir: /flink_tmp
+    ports:
+      - "8081:8081" # Flink Web UI
+      - "6123:6123" # JobManager RPC
+    networks:
+      - streaming-analytics
+    command: jobmanager
+    volumes:
+      - ./flink:/flink_jobs
+
+  taskmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    environment:
+      - FLINK_PYTHON_EXECUTABLE=python3
+      - PYTHONPATH=/path/to/python/bin
+      - |
+        FLINK_PROPERTIES=
+        taskmanager.numberOfTaskSlots: 2
+        jobmanager.rpc.address: jobmanager
+        env.java.opts: -Dpython.executable=python3
+        python.executable: /usr/bin/python3
+
+    depends_on:
+      - jobmanager
+    networks:
+      - streaming-analytics
+    command: taskmanager
+    scale: 2
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: client
+    networks:
+      - streaming-analytics
+    depends_on:
+      - jobmanager
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./flink:/flink_jobs
+    command: bash
+
+volumes:
+  postgresql_data:
+
+networks:
+  streaming-analytics:
+    name: streaming-analytics
+    driver: bridge

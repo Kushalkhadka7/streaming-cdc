@@ -1,19 +1,64 @@
 services:
-  analytics_postgres:
+  # Sql server initialization.
+  # Initializes the sql server, create database streaming_analytics
+  # Create table products and make the table ready for CDC.
+  # Check ./mssql_config/init.sql for other info.
+  streaming_analytics_mssql:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    restart: always
+    platform: linux/amd64
+    container_name: streaming_analytics_mssql
+    hostname: streaming_analytics_mssql
+    env_file:
+      - ./mssql_config/.env
+    ports:
+      - 1433:1433
+    volumes:
+      - mssql_data:/var/opt/mssql
+      - ./mssql_config/init.sql:/tmp/mssql-init.sql
+    command: >
+      /bin/bash -c "
+      /opt/mssql/bin/sqlservr &
+
+      until /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P admin@123 -C -Q 'SELECT 1' &> /dev/null; do
+        >&2 echo '******************** SQL Server is unavailable - sleeping ********************';
+        sleep 5;
+      done;
+      echo '******************** SQL Server is ready - executing init script ********************';
+      /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P admin@123 -C -i /tmp/mssql-init.sql;
+      echo '******************** SQL Server is ready - Successfully executed init script ********************';
+      sleep infinity;"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P admin@123 -C -Q 'SELECT 1' || exit 1",
+        ]
+      interval: 10s
+      retries: 10
+      start_period: 10s
+      timeout: 3s
+    networks:
+      - streaming-analytics
+
+  # postgres sql server initialization.
+  # Initializes the psql server, create database streaming_analytics.
+  # Create table orders and shipments, make these tables ready for CDC.
+  # Check ./psql_config/init.sql for other info.
+  streaming_analytics_postgres:
     image: postgres:12.20-alpine
     restart: always
-    container_name: analytics_postgres
-    hostname: analytics_postgres
+    platform: linux/amd64
+    container_name: streaming_analytics_postgres
+    hostname: streaming_analytics_postgres
     ports:
       - "5432:5432"
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: streaming_analytics
+    env_file:
+      - ./psql_config/.env
     volumes:
       - postgresql_data:/var/lib/postgresql/data
-      - ./postgressql/init.sql:/docker-entrypoint-initdb.d/init.sql
-    # This is needed for debezium to work.
+      - ./psql_config/init.sql:/docker-entrypoint-initdb.d/init.sql
+    # [NOTE]: This is needed for debezium to work.
     command: ["postgres", "-c", "wal_level=logical"]
     healthcheck:
       test: ["CMD", "psql", "-U", "admin", "-c", "SELECT 1"]
@@ -23,31 +68,22 @@ services:
     networks:
       - streaming-analytics
 
-  analytics_mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    restart: always
-    container_name: analytics_mssql
-    hostname: analytics_mssql
-    ports:
-      - "1433:1433"
-    environment:
-      - ACCEPT_EULA=Y
-      - SA_PASSWORD=admin@123
-    volumes:
-      - mssql_data:/var/opt/mssql
-    networks:
-      - streaming-analytics
-
+  # Load products dummy data to mssql products table.
   load_products:
     build:
       context: ./data_generators
       dockerfile: Dockerfile
-    container_name: data_loader
+    container_name: load_products
+    hostname: load_products
+    restart: always
+    depends_on:
+      streaming_analytics_mssql:
+        condition: service_healthy
     command: python product_generator.py
     volumes:
       - ./data_generators/product_generator.py:/app/product_generator.py
-    environment:
-      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
+    env_file:
+      - ./data_generators/.env.products
     networks:
       - streaming-analytics
 
@@ -55,12 +91,19 @@ services:
     build:
       context: ./data_generators
       dockerfile: Dockerfile
-    container_name: data_loader
+    container_name: load_orders
+    hostname: load_orders
+    restart: always
+    depends_on:
+      streaming_analytics_postgres:
+        condition: service_healthy
+      streaming_analytics_mssql:
+        condition: service_healthy
     command: python order_generator.py
     volumes:
       - ./data_generators/order_generator.py:/app/order_generator.py
-    environment:
-      - LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
+    env_file:
+      - ./data_generators/.env.orders
     networks:
       - streaming-analytics
 
@@ -68,10 +111,16 @@ services:
     image: confluentinc/cp-server:7.5.0
     hostname: broker1
     container_name: broker1
+    restart: always
     ports:
       - "29092:29092"
       - "9092:9092"
       - "9091:9091"
+    depends_on:
+      streaming_analytics_postgres:
+        condition: service_healthy
+      streaming_analytics_mssql:
+        condition: service_healthy
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
@@ -94,34 +143,39 @@ services:
     networks:
       - streaming-analytics
 
-  # broker2:
-  #   image: confluentinc/cp-server:7.5.0
-  #   hostname: broker2
-  #   container_name: broker2
-  #   ports:
-  #     - "9093:9093"
-  #     - "9094:9094"
-  #   environment:
-  #     KAFKA_NODE_ID: 2
-  #     KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
-  #     KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker2:29094,PLAINTEXT_HOST://localhost:9093"
-  #     KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
-  #     KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "broker2:9093"
-  #     KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-  #     KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
-  #     KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-  #     KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-  #     KAFKA_JMX_PORT: 9101
-  #     KAFKA_JMX_HOSTNAME: localhost
-  #     KAFKA_PROCESS_ROLES: "broker,controller"
-  #     KAFKA_CONTROLLER_QUORUM_VOTERS: "2@broker2:29094"
-  #     KAFKA_LISTENERS: "PLAINTEXT://broker2:29094,CONTROLLER://broker2:29095,PLAINTEXT_HOST://0.0.0.0:9093"
-  #     KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-  #     KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-  #     KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
-  #     CLUSTER_ID: "ciWo7IWaznqRchmPES6o5A=="
-  #   networks:
-  #     - streaming-analytics
+  broker2:
+    image: confluentinc/cp-server:7.5.0
+    hostname: broker2
+    container_name: broker2
+    ports:
+      - "9093:9093"
+      - "9094:9094"
+    depends_on:
+      streaming_analytics_postgres:
+        condition: service_healthy
+      streaming_analytics_mssql:
+        condition: service_healthy
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://broker2:29094,PLAINTEXT_HOST://localhost:9093"
+      KAFKA_METRIC_REPORTERS: io.confluent.metrics.reporter.ConfluentMetricsReporter
+      KAFKA_CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "broker2:9093"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "2@broker2:29094"
+      KAFKA_LISTENERS: "PLAINTEXT://broker2:29094,CONTROLLER://broker2:29095,PLAINTEXT_HOST://0.0.0.0:9093"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_LOG_DIRS: "/tmp/kraft-combined-logs"
+      CLUSTER_ID: "ciWo7IWaznqRchmPES6o5A=="
+    networks:
+      - streaming-analytics
 
   schema-registry:
     image: confluentinc/cp-schema-registry:7.5.0
@@ -129,7 +183,7 @@ services:
     container_name: schema-registry
     depends_on:
       - broker1
-      # - broker2
+      - broker2
     ports:
       - "8081:8081"
     environment:
@@ -145,7 +199,7 @@ services:
     container_name: control-center
     depends_on:
       - broker1
-      # - broker2
+      - broker2
       # - schema-registry
     ports:
       - "9021:9021"
@@ -165,13 +219,14 @@ services:
     networks:
       - streaming-analytics
 
-  debezium1:
+  debezium:
     image: debezium/connect:2.7
-    container_name: debezium1
-    hostname: debezium1
+    container_name: debezium
+    hostname: debezium
     depends_on:
-      - broker1
-      - analytics_postgres
+      - control-center
+      - streaming_analytics_postgres
+      - streaming_analytics_mssql
     ports:
       - "8094:8083"
     environment:
@@ -207,7 +262,7 @@ services:
     container_name: debezium-ui
     hostname: debezium-ui
     depends_on:
-      - debezium1
+      - debezium
     ports:
       - "8080:8080"
     environment:
@@ -221,6 +276,8 @@ services:
       dockerfile: Dockerfile
     container_name: jobmanager
     hostname: jobmanager
+    depends_on:
+      - control-center
     environment:
       - FLINK_PYTHON_EXECUTABLE=python3
       - PYTHONPATH=/path/to/python/bin
@@ -231,7 +288,7 @@ services:
         # jobmanager.memory.process.size: 2048m  # Increase this as needed (e.g., 3g or 4g)
         # jobmanager.memory.jvm-metaspace.size: 256m  # Adjust to leave enough space for other JVM operations
         # jobmanager.memory.jvm-overhead.min: 128m
-        # jobmanager.memory.jvm-overhead.fraction: 0.1 
+        # jobmanager.memory.jvm-overhead.fraction: 0.1
         # jobmanager.memory.managed.size: 1024m  # You can adjust this as per your available memory
         # jobmanager.memory.off-heap.size: 512m  #
         # jobmanager.memory.jvm-overhead.min: 128m  # Adjust to lower values like 64m to reduce overhead
@@ -259,6 +316,8 @@ services:
       context: .
       dockerfile: Dockerfile
     platform: linux/amd64
+    depends_on:
+      - jobmanager
     environment:
       - JOB_MANAGER_RPC_ADDRESS=jobmanager
       - FLINK_PYTHON_EXECUTABLE=python3
@@ -279,8 +338,6 @@ services:
     expose:
       - "6121"
       - "6122"
-    depends_on:
-      - jobmanager
     networks:
       - streaming-analytics
     command: taskmanager
@@ -293,6 +350,39 @@ services:
     #       memory: 3G # Increase the memory limit for JobManager
     #     reservations:
     #       memory: 2G # Reserved memory for JobManager
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.8.0
+    depends_on:
+      - jobmanager
+    environment:
+      - cluster.name=docker-cluster
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - discovery.type=single-node
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    networks:
+      - streaming-analytics
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.8.0
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - 5601:5601
+    depends_on:
+      - elasticsearch
+    networks:
+      - streaming-analytics
 
 volumes:
   postgresql_data:
