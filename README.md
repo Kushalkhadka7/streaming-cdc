@@ -4,6 +4,10 @@ Change data capture for postgres and mssql database using debezium and streaming
 
 Change Data Capture (CDC) is a technique used to identify and track changes made to data within a database. It provides a mechanism to capture only the modified data, rather than the entire dataset, resulting in significant efficiency gains and reduced data transfer volumes.
 
+## Workflow diagram
+
+![Architecture Diagram](./assets/finaldoc.png)
+
 ## Benefits
 
 - Incremental Updates
@@ -19,10 +23,6 @@ Change Data Capture (CDC) is a technique used to identify and track changes made
 - [Debezium](https://debezium.io/)
 - [Apache Kafka](https://kafka.apache.org/)
 - [Apache flink](https://flink.apache.org/)
-
-## Workflow diagram
-
-![Architecture Diagram](./assets/finaldoc.png)
 
 ## Background
 
